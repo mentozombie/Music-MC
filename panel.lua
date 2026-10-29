@@ -1,4 +1,4 @@
--- Tower Radio v1: music panel for a 3x2 Advanced Monitor + speakers on a wired network.
+-- Tower Radio v1.1: music panel for a 3x2 Advanced Monitor + speakers on a wired network.
 -- Songs come straight from your GitHub repo: "Artist - Song.dfpwm" (+ optional "Artist - Song.art").
 -- Run:  panel        Stop: hold Ctrl+T
 
@@ -583,7 +583,18 @@ local function touch(x, y)
   end
 end
 
+-- optional: an Ender Modem on this computer sends "now playing" to your Smart Glasses
+local ender = peripheral.find("modem", function(_, m) return m.isWireless() end)
+if ender then rednet.open(peripheral.getName(ender)) end
+local bcast = 0
+
 local function tick()
+  bcast = bcast + 1
+  if ender and bcast % 5 == 0 and S.tracks[S.idx] then
+    local tr = S.tracks[S.idx]
+    rednet.broadcast({ kind = "radio", title = tr.title, artist = tr.artist, pos = timeNow(),
+                       dur = tr.dur, playing = S.playing }, "tower")
+  end
   for _ = 1, 2 do
     local v = 0
     if S.playing then
