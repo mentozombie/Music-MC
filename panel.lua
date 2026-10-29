@@ -1,4 +1,4 @@
--- Tower Radio v1.1: music panel for a 3x2 Advanced Monitor + speakers on a wired network.
+-- Tower Radio v1.2: music panel for a 3x2 Advanced Monitor + speakers on a wired network.
 -- Songs come straight from your GitHub repo: "Artist - Song.dfpwm" (+ optional "Artist - Song.art").
 -- Run:  panel        Stop: hold Ctrl+T
 
@@ -21,6 +21,9 @@ if not mon.isColour() then error("This needs an Advanced (gold) monitor.", 0) en
 local monName = peripheral.getName(mon)
 local speakers = { peripheral.find("speaker") }
 if #speakers == 0 then error("No speakers found. Right-click the speaker modems so they turn red.", 0) end
+-- optional: an Ender Modem on this computer sends "now playing" and the beat to your glasses / the Watcher
+local ender = peripheral.find("modem", function(_, m) return m.isWireless() end)
+if ender then rednet.open(peripheral.getName(ender)) end
 mon.setTextScale(0.5)
 local W, H = mon.getSize()
 if W < 57 or H < 24 then
@@ -154,7 +157,7 @@ local function send(cmd) S.cmd = cmd; os.queueEvent("radio_cmd") end
 -- volume, fade in (1 s) and fade out (last 1.5 s), plus loudness for the visualizer
 local function shape(buf, pos, size)
   local vol, fi, remS = S.vol / 10, S.fadeIn, (size - pos) * 8
-  local sum, cnt, lv = 0, 0, S.levels
+  local sum, cnt, lv, mine = 0, 0, S.levels, {}
   for k = 1, #buf do
     local g = vol
     local a = (fi + k) / 48000
@@ -165,11 +168,15 @@ local function shape(buf, pos, size)
     if v > 127 then v = 127 elseif v < -128 then v = -128 end
     buf[k] = v
     sum, cnt = sum + math.abs(v), cnt + 1
-    if cnt == 4800 then lv[#lv + 1] = math.min(1, sum / cnt / 128 * 3.2); sum, cnt = 0, 0 end
+    if cnt == 4800 then
+      local l = math.min(1, sum / cnt / 128 * 3.2)
+      lv[#lv + 1] = l; mine[#mine + 1] = l; sum, cnt = 0, 0
+    end
   end
-  if cnt > 0 then lv[#lv + 1] = math.min(1, sum / cnt / 128 * 3.2) end
+  if cnt > 0 then local l = math.min(1, sum / cnt / 128 * 3.2); lv[#lv + 1] = l; mine[#mine + 1] = l end
   while #lv > 40 do table.remove(lv, 1) end
   S.fadeIn = fi + #buf
+  return mine
 end
 
 local function audio()
@@ -221,7 +228,7 @@ local function audio()
         end
       else
         local buf = dec(chunk)
-        shape(buf, pos, track.size)
+        local slices = shape(buf, pos, track.size)
         local pending = {}
         for i, s in ipairs(speakers) do pending[i] = s end
         while next(pending) and not S.cmd do
@@ -233,7 +240,13 @@ local function audio()
           end
           if next(pending) then os.pullEvent() end
         end
-        if not S.cmd then pos = pos + #chunk; S.pos = pos end
+        if not S.cmd then
+          if ender then   -- tell the Watcher how loud each 0.1 s of this chunk is, and when it will be heard
+            local startMs = os.epoch("utc") + math.max(0, pos - heard()) / BPS * 1000
+            rednet.broadcast({ kind = "levels", t0 = startMs, dt = 100, v = slices }, "tower")
+          end
+          pos = pos + #chunk; S.pos = pos
+        end
       end
     else
       os.pullEvent("radio_cmd")
@@ -583,9 +596,6 @@ local function touch(x, y)
   end
 end
 
--- optional: an Ender Modem on this computer sends "now playing" to your Smart Glasses
-local ender = peripheral.find("modem", function(_, m) return m.isWireless() end)
-if ender then rednet.open(peripheral.getName(ender)) end
 local bcast = 0
 
 local function tick()
