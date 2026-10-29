@@ -1,4 +1,4 @@
--- Tower Glasses v1: ore X-ray + base HUD for Advanced Peripherals Smart Glasses.
+-- Tower Glasses v1.1: ore X-ray + base HUD for Advanced Peripherals Smart Glasses.
 -- Glasses slots:  peripherals = Geo Scanner, Ender Modem
 --                 modules     = Overlay Module, Hotkey Module
 -- Hotkey (G by default):  tap = X-ray on/off,  hold = all ores / valuables only
@@ -74,16 +74,35 @@ local function applyVisibility()
   ov.update()
 end
 
+local function newBox(o)
+  o.obj = ov.createBox({ x = o.x + 0.5, y = o.y + 0.5, z = o.z + 0.5, sizeX = 1, sizeY = 1, sizeZ = 1,
+                         color = o.color, opacity = OPACITY, depthTest = false, depthMask = false,
+                         enabled = visible(o) })
+end
+
 ------------------------------------- HUD -------------------------------------
 local PW, LH, ROWS = 172, 11, 6
 local GOLD, DIM, TEXT, GOOD, WARN, BAD = 0xffb300, 0xa8936a, 0xfff3d6, 0x7bdc5a, 0xffd23b, 0xff5a4a
-local bg = ov.createRectangle({ gui = true, x = 0, y = 0, sizeX = PW, sizeY = 10, color = 0x100c05, opacity = 0.55 })
-local labels, values = {}, {}
-for i = 1, ROWS do
-  labels[i] = ov.createText({ gui = true, content = "", color = DIM, shadow = true })
-  values[i] = ov.createText({ gui = true, content = "", color = TEXT, shadow = true })
+local HUD_OBJECTS = 1 + 2 * ROWS
+local bg, labels, values, lastX, lastY
+local function buildHud()
+  bg = ov.createRectangle({ gui = true, x = 0, y = 0, sizeX = PW, sizeY = 10, color = 0x100c05, opacity = 0.55 })
+  labels, values, lastX, lastY = {}, {}, nil, nil
+  for i = 1, ROWS do
+    labels[i] = ov.createText({ gui = true, content = "", color = DIM, shadow = true })
+    values[i] = ov.createText({ gui = true, content = "", color = TEXT, shadow = true })
+  end
 end
-local lastX, lastY
+buildHud()
+
+-- The mod wipes everything drawn whenever the glasses leave your head.
+-- When that happens, draw it all again from scratch.
+local function rebuild()
+  ov.clear()
+  buildHud()
+  for _, o in pairs(ores) do newBox(o) end
+  ov.update()
+end
 
 local function fmtFE(v)
   local a = math.abs(v)
@@ -177,10 +196,8 @@ local function scanLoop()
             local key = bx .. "," .. by .. "," .. bz
             seen[key] = true
             if not ores[key] then
-              local o = { x = bx, y = by, z = bz, valuable = k[2] }
-              o.obj = ov.createBox({ x = bx + 0.5, y = by + 0.5, z = bz + 0.5, sizeX = 1, sizeY = 1, sizeZ = 1,
-                                     color = k[1], opacity = OPACITY, depthTest = false, depthMask = false,
-                                     enabled = visible(o) })
+              local o = { x = bx, y = by, z = bz, color = k[1], valuable = k[2] }
+              newBox(o)
               ores[key] = o
             end
           end
@@ -212,9 +229,22 @@ local function eventLoop()
     elseif e == "glasses_key_pressed" then
       if (b or 0) >= 400 then mode = (mode == "all") and "valuable" or "all" else xray = not xray end
       applyVisibility(); drawHud()
+    elseif e == "glasses_rebuild" then
+      rebuild(); applyVisibility(); drawHud()
     elseif e == "timer" and a == tmr then
       drawHud(); tmr = os.startTimer(1)
     end
+  end
+end
+
+-- notices when you put the glasses back on (or the drawing got wiped) and redraws
+local function watchLoop()
+  local was = true
+  while true do
+    local eq = smartglasses.isEquipped()
+    if eq and (not was or ov.getObjectsCount() < HUD_OBJECTS) then os.queueEvent("glasses_rebuild") end
+    was = eq
+    sleep(1)
   end
 end
 
@@ -224,7 +254,7 @@ print(geo and "Geo Scanner: ok" or "Geo Scanner: missing (no X-ray)")
 print(ender and "Ender Modem: ok" or "Ender Modem: missing (no base stats)")
 print("Hotkey: tap = X-ray on/off, hold = all/valuables")
 print("Hold Ctrl+T to stop.")
-local ok, err = pcall(parallel.waitForAny, scanLoop, eventLoop)
+local ok, err = pcall(parallel.waitForAny, scanLoop, eventLoop, watchLoop)
 ov.clear()
 ov.update()
 if not ok and err ~= "Terminated" then printError(err) end
